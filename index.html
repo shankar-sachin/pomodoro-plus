@@ -21,7 +21,7 @@
           <button id="aboutBtn" class="btn ghost" type="button">About</button>
           <button id="shortcutsBtn" class="btn ghost" type="button">Shortcuts</button>
           <button id="pipToggle" class="btn ghost" type="button">PiP Window</button>
-          <button id="miniToggle" class="btn" type="button">Mini Mode</button>
+          <button id="miniToggle" class="btn ghost" type="button">Mini Mode</button>
         </div>
       </header>
 
@@ -86,6 +86,27 @@
               Alarm Volume
               <input id="soundVolume" type="range" min="0" max="1" step="0.05" />
             </label>
+            <label>
+              Alarm Tone
+              <select id="alarmTone" class="select">
+                <option value="chime">Chime</option>
+                <option value="bell">Bell</option>
+                <option value="gong">Gong</option>
+              </select>
+            </label>
+            <label>
+              Focus Music
+              <select id="focusMusicMode" class="select">
+                <option value="off">Off</option>
+                <option value="pulse">Pulse</option>
+                <option value="drone">Drone</option>
+                <option value="rain">Rain</option>
+              </select>
+            </label>
+            <label>
+              Focus Music Volume
+              <input id="focusMusicVolume" type="range" min="0" max="1" step="0.05" />
+            </label>
             <label class="switch full">
               <input type="checkbox" id="autoStartFocus" />
               <span>Auto-start Focus</span>
@@ -93,6 +114,14 @@
             <label class="switch full">
               <input type="checkbox" id="autoStartBreak" />
               <span>Auto-start Break</span>
+            </label>
+            <label class="switch full">
+              <input type="checkbox" id="autoCheckTaskOnFocusEnd" />
+              <span>Auto-check attached task when focus ends</span>
+            </label>
+            <label class="switch full">
+              <input type="checkbox" id="cloudBackupEnabled" />
+              <span>Cloud backup mirror (localStorage)</span>
             </label>
           </div>
           <div class="control-row">
@@ -124,13 +153,43 @@
             <article class="stat-card"><span>Streak</span><strong id="streakCount">0 d</strong></article>
             <article class="stat-card"><span>Completion</span><strong id="completionRatio">0%</strong></article>
           </div>
+          <div class="stats-row rewards-row">
+            <article class="stat-card"><span>Longest Streak</span><strong id="longestStreakCount">0 d</strong></article>
+            <article class="stat-card"><span>Reward Tier</span><strong id="rewardTier">Starter</strong></article>
+            <article class="stat-card"><span>Weekly Goal</span><strong id="weeklyGoalProgress">0%</strong></article>
+            <article class="stat-card"><span>Top Task</span><strong id="topTaskLabel">None</strong></article>
+          </div>
+          <h3>Time by Task</h3>
+          <ul id="taskBreakdown" class="task-breakdown"></ul>
+          <h3>Export and Sync</h3>
+          <div class="export-grid">
+            <div class="export-head subtle">CSV</div>
+            <div class="export-head subtle">XLSX</div>
+            <button id="exportDayCsvBtn" class="btn ghost small" type="button">Day</button>
+            <button id="exportDayXlsxBtn" class="btn ghost small" type="button">Day</button>
+            <button id="exportWeekCsvBtn" class="btn ghost small" type="button">Week</button>
+            <button id="exportWeekXlsxBtn" class="btn ghost small" type="button">Week</button>
+            <button id="exportMonthCsvBtn" class="btn ghost small" type="button">Month</button>
+            <button id="exportMonthXlsxBtn" class="btn ghost small" type="button">Month</button>
+          </div>
+          <div class="control-row export-actions">
+            <button id="backupNowBtn" class="btn" type="button">Backup Now</button>
+            <button id="restoreBackupBtn" class="btn" type="button">Restore Backup</button>
+          </div>
           <h3>Weekly Minutes</h3>
           <canvas id="weeklyChart" width="640" height="180"></canvas>
           <h3>Month Heatmap</h3>
           <div id="heatmap" class="heatmap"></div>
         </section>
+
+        <section class="panel glass notes-panel">
+          <h2>Session Notes</h2>
+          <p class="subtle">Keep quick notes, blockers, and next steps while you focus.</p>
+          <textarea class="input notes-input" placeholder="Write your focus notes here..."></textarea>
+        </section>
       </section>
     </main>
+    <footer class="site-footer subtle">2026 Pomodoro+, Made by Sachin Shankar</footer>
 
     <aside id="miniTimer" class="mini-timer hidden glass" aria-live="polite">
       <div class="mini-head">

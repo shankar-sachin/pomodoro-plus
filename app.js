@@ -2,6 +2,7 @@
   "use strict";
 
   const STORAGE_KEY = "pomodoro_plus_v1";
+  const CLOUD_BACKUP_KEY = "pomodoro_plus_cloud_backup_v1";
   const MAX_MINUTES_PER_SEGMENT = 500;
   const CIRCLE_LENGTH = 490;
   const PHASE_META = {
@@ -18,12 +19,17 @@
       highContrast: false,
       soundEnabled: true,
       soundVolume: 0.6,
+      alarmTone: "chime",
+      focusMusicMode: "off",
+      focusMusicVolume: 0.22,
       notificationEnabled: false,
       tickSound: false,
       autoStartBreak: false,
       autoStartFocus: false,
+      autoCheckTaskOnFocusEnd: false,
       showSeconds: true,
       keepScreenAwake: false,
+      cloudBackupEnabled: false,
       miniPos: { x: null, y: null }
     },
     profiles: [
@@ -65,6 +71,12 @@
     skip: null,
     close: null
   };
+  const music = {
+    ctx: null,
+    gain: null,
+    mode: "off",
+    nodes: []
+  };
 
   const el = {
     body: document.body,
@@ -82,6 +94,11 @@
     autoStartFocus: document.getElementById("autoStartFocus"),
     autoStartBreak: document.getElementById("autoStartBreak"),
     soundVolume: document.getElementById("soundVolume"),
+    alarmTone: document.getElementById("alarmTone"),
+    focusMusicMode: document.getElementById("focusMusicMode"),
+    focusMusicVolume: document.getElementById("focusMusicVolume"),
+    autoCheckTaskOnFocusEnd: document.getElementById("autoCheckTaskOnFocusEnd"),
+    cloudBackupEnabled: document.getElementById("cloudBackupEnabled"),
     profileName: document.getElementById("profileName"),
     focusMin: document.getElementById("focusMin"),
     shortBreakMin: document.getElementById("shortBreakMin"),
@@ -101,6 +118,19 @@
     sessionCount: document.getElementById("sessionCount"),
     streakCount: document.getElementById("streakCount"),
     completionRatio: document.getElementById("completionRatio"),
+    longestStreakCount: document.getElementById("longestStreakCount"),
+    rewardTier: document.getElementById("rewardTier"),
+    weeklyGoalProgress: document.getElementById("weeklyGoalProgress"),
+    topTaskLabel: document.getElementById("topTaskLabel"),
+    taskBreakdown: document.getElementById("taskBreakdown"),
+    exportDayCsvBtn: document.getElementById("exportDayCsvBtn"),
+    exportDayXlsxBtn: document.getElementById("exportDayXlsxBtn"),
+    exportWeekCsvBtn: document.getElementById("exportWeekCsvBtn"),
+    exportWeekXlsxBtn: document.getElementById("exportWeekXlsxBtn"),
+    exportMonthCsvBtn: document.getElementById("exportMonthCsvBtn"),
+    exportMonthXlsxBtn: document.getElementById("exportMonthXlsxBtn"),
+    backupNowBtn: document.getElementById("backupNowBtn"),
+    restoreBackupBtn: document.getElementById("restoreBackupBtn"),
     weeklyChart: document.getElementById("weeklyChart"),
     heatmap: document.getElementById("heatmap"),
     miniToggle: document.getElementById("miniToggle"),
@@ -140,6 +170,7 @@
     renderTimer();
     renderAnalytics();
     restoreMiniPosition();
+    syncFocusMusic();
     if (state.timerState.isRunning) startTicker();
   }
 
@@ -175,6 +206,7 @@
   function saveState() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (state.settings.cloudBackupEnabled) writeCloudBackup();
     } catch (error) {
       toast("Storage full. Running in memory until space is available.");
     }
@@ -193,6 +225,28 @@
     el.autoStartFocus.addEventListener("change", () => setSetting("autoStartFocus", el.autoStartFocus.checked));
     el.autoStartBreak.addEventListener("change", () => setSetting("autoStartBreak", el.autoStartBreak.checked));
     el.soundVolume.addEventListener("input", () => setSetting("soundVolume", Number(el.soundVolume.value)));
+    el.alarmTone.addEventListener("change", () => {
+      setSetting("alarmTone", el.alarmTone.value);
+      if (state.settings.soundEnabled) playAlarm(state.settings.soundVolume);
+    });
+    el.focusMusicMode.addEventListener("change", () => {
+      setSetting("focusMusicMode", el.focusMusicMode.value);
+      syncFocusMusic();
+    });
+    el.focusMusicVolume.addEventListener("input", () => {
+      setSetting("focusMusicVolume", Number(el.focusMusicVolume.value));
+      syncFocusMusic();
+    });
+    el.autoCheckTaskOnFocusEnd.addEventListener("change", () => setSetting("autoCheckTaskOnFocusEnd", el.autoCheckTaskOnFocusEnd.checked));
+    el.cloudBackupEnabled.addEventListener("change", () => {
+      setSetting("cloudBackupEnabled", el.cloudBackupEnabled.checked);
+      if (el.cloudBackupEnabled.checked) {
+        writeCloudBackup();
+        toast("Cloud backup mirror enabled.");
+      } else {
+        toast("Cloud backup mirror disabled.");
+      }
+    });
     el.focusMin.addEventListener("input", () => validateTimeCapField("focus", Number(el.focusMin.value)));
     el.shortBreakMin.addEventListener("input", () => validateTimeCapField("shortBreak", Number(el.shortBreakMin.value)));
     el.longBreakMin.addEventListener("input", () => validateTimeCapField("longBreak", Number(el.longBreakMin.value)));
@@ -220,6 +274,17 @@
         renderAnalytics();
       });
     });
+    el.exportDayCsvBtn.addEventListener("click", () => exportAnalyticsCsv(1, "day"));
+    el.exportDayXlsxBtn.addEventListener("click", () => exportAnalyticsXlsx(1, "day"));
+    el.exportWeekCsvBtn.addEventListener("click", () => exportAnalyticsCsv(7, "week"));
+    el.exportWeekXlsxBtn.addEventListener("click", () => exportAnalyticsXlsx(7, "week"));
+    el.exportMonthCsvBtn.addEventListener("click", () => exportAnalyticsCsv(30, "month"));
+    el.exportMonthXlsxBtn.addEventListener("click", () => exportAnalyticsXlsx(30, "month"));
+    el.backupNowBtn.addEventListener("click", () => {
+      writeCloudBackup();
+      toast("Backup saved.");
+    });
+    el.restoreBackupBtn.addEventListener("click", restoreFromCloudBackup);
 
     el.miniToggle.addEventListener("click", toggleMiniTimer);
     el.pipToggle.addEventListener("click", togglePiPWindow);
@@ -260,9 +325,6 @@
 
   function handleShortcuts(event) {
     if (event.target && /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) {
-      if (event.key.toLowerCase() === "t") {
-        el.taskInput.focus();
-      }
       return;
     }
     if (event.key === " ") {
@@ -291,6 +353,7 @@
       renderTasks();
       renderTimer();
       renderAnalytics();
+      syncFocusMusic();
       if (state.timerState.isRunning && !tickHandle) startTicker();
     } catch (error) {
       toast("Detected invalid sync data from another tab.");
@@ -312,6 +375,7 @@
   function setSetting(key, value) {
     state.settings[key] = value;
     saveState();
+    if (key === "focusMusicMode" || key === "focusMusicVolume") syncFocusMusic();
   }
 
   function getActiveProfile() {
@@ -421,7 +485,12 @@
     el.showSeconds.checked = !!state.settings.showSeconds;
     el.autoStartFocus.checked = !!state.settings.autoStartFocus;
     el.autoStartBreak.checked = !!state.settings.autoStartBreak;
+    el.autoCheckTaskOnFocusEnd.checked = !!state.settings.autoCheckTaskOnFocusEnd;
+    el.cloudBackupEnabled.checked = !!state.settings.cloudBackupEnabled;
     el.soundVolume.value = String(state.settings.soundVolume ?? 0.6);
+    el.alarmTone.value = state.settings.alarmTone || "chime";
+    el.focusMusicMode.value = state.settings.focusMusicMode || "off";
+    el.focusMusicVolume.value = String(state.settings.focusMusicVolume ?? 0.22);
     el.themeSelect.value = state.settings.theme || "auto";
     el.fontSelect.value = state.settings.fontFamily || "inter";
     el.highContrastToggle.checked = !!state.settings.highContrast;
@@ -445,6 +514,7 @@
     }
     saveState();
     renderTimer();
+    syncFocusMusic();
   }
 
   function startTicker() {
@@ -484,6 +554,7 @@
     stopTicker();
     saveState();
     renderTimer();
+    syncFocusMusic();
   }
 
   function finishSegment(completed) {
@@ -511,6 +582,10 @@
 
     if (currentPhase === "focus" && completed) {
       state.timerState.completedFocusInCycle += 1;
+      if (state.settings.autoCheckTaskOnFocusEnd && state.timerState.sessionTaskId) {
+        const task = state.tasks.find((t) => t.id === state.timerState.sessionTaskId);
+        if (task) task.done = true;
+      }
     }
     const next = nextPhase(currentPhase, state.timerState.completedFocusInCycle, profile.cyclesBeforeLongBreak);
     const nextSec = phaseDurationSec(next, profile);
@@ -535,6 +610,7 @@
     renderTasks();
     renderTimer();
     renderAnalytics();
+    syncFocusMusic();
   }
 
   function nextPhase(current, completedFocusInCycle, cyclesBeforeLongBreak) {
@@ -563,15 +639,131 @@
     const gain = ctx.createGain();
     gain.connect(ctx.destination);
     gain.gain.value = Math.max(0, Math.min(1, volume || 0.6)) * 0.2;
-    [880, 660, 990].forEach((freq, i) => {
+    const tone = state.settings.alarmTone || "chime";
+    const presets = {
+      chime: { type: "sine", seq: [880, 660, 990], step: 0.12, dur: 0.1 },
+      bell: { type: "triangle", seq: [784, 988, 1174], step: 0.15, dur: 0.2 },
+      gong: { type: "sine", seq: [196, 261, 329], step: 0.22, dur: 0.32 }
+    };
+    const spec = presets[tone] || presets.chime;
+    spec.seq.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       osc.frequency.value = freq;
-      osc.type = "sine";
+      osc.type = spec.type;
       osc.connect(gain);
-      osc.start(ctx.currentTime + i * 0.12);
-      osc.stop(ctx.currentTime + i * 0.12 + 0.1);
+      osc.start(ctx.currentTime + i * spec.step);
+      osc.stop(ctx.currentTime + i * spec.step + spec.dur);
     });
-    window.setTimeout(() => ctx.close(), 700);
+    window.setTimeout(() => ctx.close(), 900);
+  }
+
+  function syncFocusMusic() {
+    const mode = state.settings.focusMusicMode || "off";
+    const shouldPlay = state.timerState.isRunning && state.timerState.phase === "focus" && mode !== "off";
+    if (!shouldPlay) {
+      stopFocusMusic();
+      return;
+    }
+    const volume = Math.max(0, Math.min(1, Number(state.settings.focusMusicVolume ?? 0.22)));
+    if (!music.ctx || !music.gain || music.mode !== mode) {
+      startFocusMusic(mode, volume);
+      return;
+    }
+    music.gain.gain.setTargetAtTime(volume * 0.06, music.ctx.currentTime, 0.08);
+  }
+
+  function startFocusMusic(mode, volume) {
+    stopFocusMusic();
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.value = volume * 0.04;
+    music.ctx = ctx;
+    music.gain = gain;
+    music.mode = mode;
+    music.nodes = [];
+
+    if (mode === "pulse") {
+      const oscA = ctx.createOscillator();
+      const oscB = ctx.createOscillator();
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      oscA.type = "sine";
+      oscB.type = "triangle";
+      oscA.frequency.value = 174;
+      oscB.frequency.value = 261;
+      lfo.frequency.value = 0.17;
+      lfoGain.gain.value = 20;
+      lfo.connect(lfoGain);
+      lfoGain.connect(oscA.frequency);
+      oscA.connect(gain);
+      oscB.connect(gain);
+      oscA.start();
+      oscB.start();
+      lfo.start();
+      music.nodes.push(oscA, oscB, lfo, lfoGain);
+    } else if (mode === "drone") {
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      osc.type = "sawtooth";
+      osc.frequency.value = 110;
+      filter.type = "lowpass";
+      filter.frequency.value = 480;
+      osc.connect(filter);
+      filter.connect(gain);
+      osc.start();
+      music.nodes.push(osc, filter);
+    } else if (mode === "rain") {
+      const bufferSize = ctx.sampleRate * 2;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i += 1) channel[i] = Math.random() * 2 - 1;
+      const source = ctx.createBufferSource();
+      const filter = ctx.createBiquadFilter();
+      source.buffer = buffer;
+      source.loop = true;
+      filter.type = "highpass";
+      filter.frequency.value = 900;
+      source.connect(filter);
+      filter.connect(gain);
+      source.start();
+      music.nodes.push(source, filter);
+    }
+  }
+
+  function stopFocusMusic() {
+    if (!music.ctx) return;
+    music.nodes.forEach((node) => {
+      if (node && typeof node.stop === "function") {
+        try {
+          node.stop();
+        } catch (error) {
+          // No-op.
+        }
+      }
+      if (node && typeof node.disconnect === "function") {
+        try {
+          node.disconnect();
+        } catch (error) {
+          // No-op.
+        }
+      }
+    });
+    if (music.gain && typeof music.gain.disconnect === "function") {
+      try {
+        music.gain.disconnect();
+      } catch (error) {
+        // No-op.
+      }
+    }
+    const ctx = music.ctx;
+    music.ctx = null;
+    music.gain = null;
+    music.mode = "off";
+    music.nodes = [];
+    ctx.close().catch(() => {});
   }
 
   function renderTimer() {
@@ -626,16 +818,18 @@
       el.taskList.innerHTML = `<li class="subtle">No tasks yet.</li>`;
       return;
     }
+    const usage = computeTaskUsageMap();
     el.taskList.innerHTML = "";
     state.tasks.forEach((task, index) => {
       const item = document.createElement("li");
       item.className = "task-item";
       const isSelected = task.id === (selectedTaskId || state.timerState.sessionTaskId);
+      const taskUsage = usage.get(task.id) || { sessions: 0, minutes: 0 };
       item.innerHTML = `
         <label class="task-check">
           <input type="checkbox" ${task.done ? "checked" : ""} data-action="toggle" data-id="${escapeHtml(task.id)}" />
         </label>
-        <button class="btn ghost small task-title ${task.done ? "done" : ""}" data-action="attach" data-id="${escapeHtml(task.id)}">${escapeHtml(task.title)} (${task.completedPomodoros}) ${isSelected ? "[active]" : ""}</button>
+        <button class="btn ghost small task-title ${task.done ? "done" : ""}" data-action="attach" data-id="${escapeHtml(task.id)}">${escapeHtml(task.title)} (${taskUsage.sessions} sess, ${Math.round(taskUsage.minutes)} min, ${task.completedPomodoros} done) ${isSelected ? "[active]" : ""}</button>
         <div>
           <button class="btn ghost small" data-action="up" data-id="${escapeHtml(task.id)}" ${index === 0 ? "disabled" : ""}>^</button>
           <button class="btn ghost small" data-action="down" data-id="${escapeHtml(task.id)}" ${index === state.tasks.length - 1 ? "disabled" : ""}>v</button>
@@ -691,11 +885,25 @@
     const sessions = history.length;
     const completed = history.filter((h) => h.completed).length;
     const completionRatio = sessions ? Math.round((completed / sessions) * 100) : 0;
+    const longestStreak = computeLongestStreakDays();
+    const weekMin = sum(state.history
+      .filter((h) => h.phase === "focus" && h.endedAt >= now - 7 * dayMs)
+      .map((h) => h.actualSec)) / 60;
+    const weeklyGoal = 600;
+    const weeklyGoalPct = Math.min(100, Math.round((weekMin / weeklyGoal) * 100));
+    const tier = rewardTierFromMinutes(weekMin);
+    const taskTotals = computeTaskTotals(analyticsRangeDays);
+    const topTask = taskTotals[0];
 
     el.todayMinutes.textContent = `${Math.round(todayMin)} min`;
     el.sessionCount.textContent = String(sessions);
     el.completionRatio.textContent = `${completionRatio}%`;
     el.streakCount.textContent = `${computeStreakDays()} d`;
+    el.longestStreakCount.textContent = `${longestStreak} d`;
+    el.rewardTier.textContent = tier;
+    el.weeklyGoalProgress.textContent = `${weeklyGoalPct}%`;
+    el.topTaskLabel.textContent = topTask ? `${topTask.title} (${Math.round(topTask.minutes)} min)` : "None";
+    renderTaskBreakdown(taskTotals);
 
     drawWeeklyBars();
     drawHeatmap();
@@ -771,6 +979,173 @@
       else break;
     }
     return streak;
+  }
+
+  function computeLongestStreakDays() {
+    const focusHistory = state.history.filter((h) => h.phase === "focus");
+    if (!focusHistory.length) return 0;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const firstDay = startOfDay(Math.min(...focusHistory.map((h) => h.endedAt)));
+    const lastDay = startOfDay(Date.now());
+    let longest = 0;
+    let current = 0;
+    for (let day = firstDay; day <= lastDay; day += dayMs) {
+      const hasMinutes = focusHistory.some((h) => h.endedAt >= day && h.endedAt < day + dayMs && h.actualSec > 0);
+      if (hasMinutes) {
+        current += 1;
+        longest = Math.max(longest, current);
+      } else {
+        current = 0;
+      }
+    }
+    return longest;
+  }
+
+  function rewardTierFromMinutes(weeklyMinutes) {
+    if (weeklyMinutes >= 600) return "Legend";
+    if (weeklyMinutes >= 300) return "Deep Work";
+    if (weeklyMinutes >= 120) return "Flow";
+    return "Starter";
+  }
+
+  function computeTaskUsageMap() {
+    const usage = new Map();
+    state.history.forEach((h) => {
+      if (h.phase !== "focus" || !h.taskId) return;
+      const entry = usage.get(h.taskId) || { sessions: 0, minutes: 0 };
+      entry.sessions += 1;
+      entry.minutes += (Number(h.actualSec) || 0) / 60;
+      usage.set(h.taskId, entry);
+    });
+    return usage;
+  }
+
+  function computeTaskTotals(rangeDays) {
+    const from = Date.now() - rangeDays * 24 * 60 * 60 * 1000;
+    const usage = new Map();
+    state.history.forEach((h) => {
+      if (h.phase !== "focus" || !h.taskId || h.endedAt < from) return;
+      const entry = usage.get(h.taskId) || { taskId: h.taskId, minutes: 0, sessions: 0 };
+      entry.minutes += (Number(h.actualSec) || 0) / 60;
+      entry.sessions += 1;
+      usage.set(h.taskId, entry);
+    });
+    return Array.from(usage.values())
+      .map((entry) => {
+        const task = state.tasks.find((t) => t.id === entry.taskId);
+        return {
+          ...entry,
+          title: task ? task.title : "Deleted Task"
+        };
+      })
+      .sort((a, b) => b.minutes - a.minutes);
+  }
+
+  function renderTaskBreakdown(taskTotals) {
+    if (!taskTotals.length) {
+      el.taskBreakdown.innerHTML = `<li class="subtle">No focus time tracked yet.</li>`;
+      return;
+    }
+    el.taskBreakdown.innerHTML = taskTotals
+      .slice(0, 6)
+      .map((item) => `<li><span>${escapeHtml(item.title)}</span><strong>${Math.round(item.minutes)} min | ${item.sessions} sessions</strong></li>`)
+      .join("");
+  }
+
+  function exportAnalyticsCsv(rangeDays, label) {
+    const { header, rows } = buildExportRows(rangeDays);
+    const csv = [header, ...rows]
+      .map((row) => row.map(csvEscape).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `pomodoro_analytics_${label}_${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${label} CSV.`);
+  }
+
+  function exportAnalyticsXlsx(rangeDays, label) {
+    const { header, rows } = buildExportRows(rangeDays);
+    const tableRows = [header, ...rows]
+      .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
+      .join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"></head><body><table>${tableRows}</table></body></html>`;
+    const blob = new Blob([html], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `pomodoro_analytics_${label}_${stamp}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${label} XLSX.`);
+  }
+
+  function buildExportRows(rangeDays) {
+    const from = rangeDays === 1
+      ? startOfDay(Date.now())
+      : Date.now() - rangeDays * 24 * 60 * 60 * 1000;
+    const rows = state.history
+      .filter((h) => h.phase === "focus" && h.endedAt >= from)
+      .map((h) => {
+        const task = state.tasks.find((t) => t.id === h.taskId);
+        return [
+          new Date(h.endedAt).toISOString(),
+          task ? task.title : "",
+          h.phase,
+          h.completed ? "yes" : "no",
+          ((Number(h.plannedSec) || 0) / 60).toFixed(2),
+          ((Number(h.actualSec) || 0) / 60).toFixed(2),
+          new Date(Number(h.startedAt) || h.endedAt).toISOString(),
+          new Date(h.endedAt).toISOString()
+        ].map(String);
+      });
+    const header = ["date", "task", "phase", "completed", "planned_minutes", "actual_minutes", "started_at", "ended_at"];
+    return { header, rows };
+  }
+
+  function writeCloudBackup() {
+    localStorage.setItem(CLOUD_BACKUP_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      data: state
+    }));
+  }
+
+  function restoreFromCloudBackup() {
+    try {
+      const raw = localStorage.getItem(CLOUD_BACKUP_KEY);
+      if (!raw) {
+        toast("No backup found.");
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const incoming = migrateState(parsed?.data || parsed);
+      Object.assign(state, incoming);
+      saveState();
+      renderProfiles();
+      renderSettings();
+      renderTasks();
+      renderTimer();
+      renderAnalytics();
+      syncFocusMusic();
+      if (state.timerState.isRunning && !tickHandle) startTicker();
+      toast("Backup restored.");
+    } catch (error) {
+      toast("Backup restore failed.");
+    }
+  }
+
+  function csvEscape(value) {
+    const text = String(value ?? "");
+    return `"${text.replaceAll('"', '""')}"`;
   }
 
   function applyEmbedMode() {
