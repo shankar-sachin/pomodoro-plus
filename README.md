@@ -1,6 +1,6 @@
-# Pomodoro++
+# Pomodoro+
 
-Pomodoro++ is a zero-dependency single-page productivity timer built with only HTML, CSS, and JavaScript.
+Pomodoro+ is a zero-dependency single-page productivity timer built with only HTML, CSS, and JavaScript.
 
 ## Run
 
